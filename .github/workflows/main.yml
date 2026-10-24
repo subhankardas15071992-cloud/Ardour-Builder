@@ -1,0 +1,725 @@
+# =============================================================================
+# Build Ardour for Windows x86_64, macOS arm64, and macOS x86_64
+# =============================================================================
+#
+# This workflow clones the official Ardour source (https://github.com/Ardour/ardour),
+# fetches all dependencies via MSYS2 (Windows) or Homebrew (macOS), compiles
+# Ardour, packages it using the project's own packaging scripts
+# (tools/x-win/package.sh and tools/osx_packaging/osx_build), and uploads the
+# resulting Windows installer (.exe) and macOS disk images (.dmg) as
+# downloadable GitHub Actions artifacts.
+#
+# Runners (per the user's brief):
+#   Windows x86_64 : windows-latest     (uses MSYS2 mingw64 native build)
+#   macOS arm64   : macOS-latest       (M1 / Apple Silicon)
+#   macOS x86_64  : macOS-15-intel     (Intel)
+#
+# All proprietary bits (Harrison LV2, x42 commercial, harvid, xjadeo,
+# ArdourBundledMedia) are skipped via env vars so the output is a pure
+# open-source build.
+#
+# To use this workflow:
+#   1. Create an empty GitHub repository (or use an existing one).
+#   2. Copy this file to: .github/workflows/build-ardour.yml
+#   3. Copy the packaging/ directory alongside (optional helpers).
+#   4. Push to GitHub. The workflow runs on push, on PR, on schedule
+#      (weekly Sunday 04:00 UTC), and via the "Run workflow" button.
+#
+# Optional secrets (for macOS code-signing & notarization — leave unset
+# for an unsigned build that still runs fine on macOS 10.13+):
+#   APPLE_DEVELOPER_ID_FOR_APPLICATION  "Developer ID Application: Your Name (ABCDEF1234)"
+#   APPLE_ID                            your Apple ID email
+#   APPLE_TEAM_ID                       your Team ID
+#   ALTOOL_PASSWORD                     app-specific password (or NOTARYTOOL_PROFILE)
+#   NOTARYTOOL_PROFILE                  keychain-stored profile (alternative to ALTOOL_PASSWORD)
+# =============================================================================
+
+name: Build Ardour Installers
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      ardour_tag:
+        description: 'Ardour git tag or branch to build (default: 9.8)'
+        required: false
+        default: '9.8'
+  schedule:
+    # Weekly build every Sunday at 04:00 UTC
+    - cron: '0 4 * * 0'
+
+# Cancel in-progress builds of the same workflow+ref combo
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Ardour source to clone. Override via workflow_dispatch input if needed.
+  ARDOUR_REPO: https://github.com/Ardour/ardour.git
+  ARDOUR_TAG: ${{ github.event.inputs.ardour_tag || '9.8' }}
+  # Skip all proprietary bundling: Harrison LV2, x42 plugins, harvid, xjadeo
+  WITH_HARRISON_LV2: ''
+  WITH_GMSYNTH: ''
+  WITH_HARVID: ''
+  WITH_XJADEO: ''
+
+jobs:
+  # ===========================================================================
+  # Windows x86_64 build on windows-latest using MSYS2 mingw64
+  # ===========================================================================
+  build-windows-x86_64:
+    name: Windows x86_64 (MSYS2 mingw64)
+    runs-on: windows-latest
+    timeout-minutes: 240
+    steps:
+      - name: Checkout this repo (for any packaging/ helpers)
+        uses: actions/checkout@v4
+
+      - name: Configure Git line endings
+        run: git config --global core.autocrlf false
+        shell: bash
+
+      - name: Setup MSYS2 mingw64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            base-devel
+            git
+            tar
+            unzip
+            zip
+            rsync
+            wget
+            curl
+            python3
+            yasm
+            nasm
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-meson
+            mingw-w64-x86_64-pkg-config
+            mingw-w64-x86_64-nsis
+            mingw-w64-x86_64-drmingw
+            mingw-w64-x86_64-libgnurx
+            mingw-w64-x86_64-gettext
+            mingw-w64-x86_64-libiconv
+            mingw-w64-x86_64-glib2
+            mingw-w64-x86_64-glibmm
+            mingw-w64-x86_64-cairo
+            mingw-w64-x86_64-cairomm
+            mingw-w64-x86_64-pango
+            mingw-w64-x86_64-pangomm
+            mingw-w64-x86_64-atk
+            mingw-w64-x86_64-atkmm
+            mingw-w64-x86_64-pixman
+            mingw-w64-x86_64-freetype
+            mingw-w64-x86_64-fontconfig
+            mingw-w64-x86_64-fribidi
+            mingw-w64-x86_64-harfbuzz
+            mingw-w64-x86_64-graphite2
+            mingw-w64-x86_64-expat
+            mingw-w64-x86_64-libpng
+            mingw-w64-x86_64-libjpeg-turbo
+            mingw-w64-x86_64-libtiff
+            mingw-w64-x86_64-libogg
+            mingw-w64-x86_64-flac
+            mingw-w64-x86_64-libvorbis
+            mingw-w64-x86_64-opus
+            mingw-w64-x86_64-libsndfile
+            mingw-w64-x86_64-libsamplerate
+            mingw-w64-x86_64-fftw
+            mingw-w64-x86_64-libxml2
+            mingw-w64-x86_64-libxslt
+            mingw-w64-x86_64-curl
+            mingw-w64-x86_64-libarchive
+            mingw-w64-x86_64-taglib
+            mingw-w64-x86_64-liblo
+            mingw-w64-x86_64-libusb
+            mingw-w64-x86_64-libwebsockets
+            mingw-w64-x86_64-readline
+            mingw-w64-x86_64-termcap
+            mingw-w64-x86_64-boost
+            mingw-w64-x86_64-cppunit
+            mingw-w64-x86_64-aubio
+            mingw-w64-x86_64-rubberband
+            mingw-w64-x86_64-vamp-plugin-sdk
+            mingw-w64-x86_64-lv2
+            mingw-w64-x86_64-serd
+            mingw-w64-x86_64-sord
+            mingw-w64-x86_64-sratom
+            mingw-w64-x86_64-lilv
+            mingw-w64-x86_64-raptor
+            mingw-w64-x86_64-lrdf
+            mingw-w64-x86_64-portaudio
+            mingw-w64-x86_64-jack2
+            mingw-w64-x86_64-xz
+            mingw-w64-x86_64-zlib
+            mingw-w64-x86_64-bzip2
+            mingw-w64-x86_64-libffi
+
+      - name: Clone Ardour source
+        shell: msys2 {0}
+        run: |
+          set -e
+          # We need full history + tags for `git describe` to compute the version
+          git clone --branch "${ARDOUR_TAG}" "${ARDOUR_REPO}" ardour
+          cd ardour
+          git fetch --unshallow --tags || git fetch --tags
+          echo "Ardour version:"
+          git describe --tags
+          git log --oneline -1
+
+      - name: Cache waf build output
+        uses: actions/cache@v4
+        with:
+          path: ardour/build
+          key: ardour-windows-${{ env.ARDOUR_TAG }}-${{ hashFiles('ardour/**/wscript', 'ardour/wscript') }}
+          restore-keys: |
+            ardour-windows-${{ env.ARDOUR_TAG }}-
+            ardour-windows-
+
+      - name: Configure (waf configure)
+        shell: msys2 {0}
+        run: |
+          set -e
+          cd ardour
+          # Use the production-style configure line, adapted for MSYS2 native mingw64.
+          # The original cross-compile used `--dist-target=mingw`; on MSYS2 mingw64
+          # native, we use the auto-detect path so waf picks up x86_64-w64-mingw32-gcc.
+          CFLAGS="-mstackrealign -O2" \
+          CXXFLAGS="-mstackrealign -O2 -Wa,-mbig-obj" \
+          LDFLAGS="-L/mingw64/lib" \
+          ./waf configure \
+            --keepflags \
+            --dist-target=mingw \
+            --ptformat \
+            --with-backends=jack,portaudio,dummy \
+            --optimize \
+            --cxx17 \
+            --prefix=/mingw64
+
+      - name: Build (waf)
+        shell: msys2 {0}
+        run: |
+          set -e
+          cd ardour
+          nproc
+          ./waf -j$(nproc)
+
+      - name: Generate translations (waf i18n)
+        shell: msys2 {0}
+        run: |
+          set -e
+          cd ardour
+          ./waf i18n
+
+      - name: Package Windows installer
+        shell: msys2 {0}
+        env:
+          # The Ardour tools/x-win/package.sh expects a $PREFIX pointing at the
+          # cross-built GTK stack. On MSYS2 mingw64, /mingw64 IS that stack.
+          XARCH: x86_64
+          ROOT: /mingw64
+          PREFIX: /mingw64
+          TMPDIR: ${{ runner.temp }}
+          SRCCACHE: ${{ runner.temp }}/src-cache
+        run: |
+          set -e
+          mkdir -p "$SRCCACHE"
+          cd ardour
+          # Run the official Ardour packaging script with all proprietary bits off.
+          # It will run `./waf install` to stage files in $DESTDIR, copy all
+          # dependent DLLs from /mingw64/bin and /mingw64/lib, then generate the
+          # NSIS .nsi file and run makensis to produce the installer .exe.
+          bash tools/x-win/package.sh
+          # The installer .exe ends up in $TMPDIR/Ardour-<version>-w64-Setup.exe
+          ls -la "$TMPDIR/"*.exe || ls -la "${TMPDIR}"/*-Setup.exe
+          # Move it to a known path for upload
+          find "${TMPDIR}" -name "*-Setup.exe" -exec cp -v {} ardour/Ardour-Setup.exe \;
+
+      - name: Verify installer
+        shell: msys2 {0}
+        run: |
+          ls -la ardour/Ardour-Setup.exe
+          # Sanity check: a working installer is at least 30 MiB
+          size=$(stat -c%s ardour/Ardour-Setup.exe)
+          echo "Installer size: $size bytes ($((size/1024/1024)) MiB)"
+          if [ "$size" -lt 30000000 ]; then
+            echo "::error::Installer is suspiciously small — packaging likely failed"
+            exit 1
+          fi
+
+      - name: Rename installer with version+arch
+        shell: bash
+        run: |
+          cd ardour
+          VERSION=$(git describe --tags | head -1 | tr '/' '-')
+          mv Ardour-Setup.exe "Ardour-${VERSION}-Windows-x86_64-Setup.exe"
+          ls -la "Ardour-${VERSION}-Windows-x86_64-Setup.exe"
+          echo "INSTALLER_PATH=Ardour-${VERSION}-Windows-x86_64-Setup.exe" >> $GITHUB_ENV
+
+      - name: Upload Windows installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ardour-${{ env.ARDOUR_TAG }}-Windows-x86_64-Setup
+          path: ardour/Ardour-*-Windows-x86_64-Setup.exe
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload Windows build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ardour-${{ env.ARDOUR_TAG }}-Windows-x86_64-logs
+          path: |
+            ardour/build/config.log
+            ardour/build/.wafpickle-*
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ===========================================================================
+  # macOS arm64 build on macOS-latest (Apple Silicon)
+  # ===========================================================================
+  build-macos-arm64:
+    name: macOS arm64 (Apple Silicon)
+    runs-on: macos-latest
+    timeout-minutes: 240
+    env:
+      # macOS runners: Homebrew prefix is /opt/homebrew on M1, /usr/local on Intel.
+      # We compute the right path per-runner in a step below.
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - name: Checkout this repo (for any packaging/ helpers)
+        uses: actions/checkout@v4
+
+      - name: Set Homebrew prefix
+        run: |
+          echo "BREW_PREFIX=$(brew --prefix)" >> $GITHUB_ENV
+          echo "Detected Homebrew at: $(brew --prefix)"
+          echo "Runner arch: $(uname -m)"
+
+      - name: Install Homebrew dependencies
+        run: |
+          # Package names verified against https://formulae.brew.sh/api/formula.json
+          # Two of these are recognized aliases (both work with `brew install`):
+          #   pkg-config → canonical name is `pkgconf`
+          #   python@3   → canonical name is `python@3.15` (current latest)
+          # `boost` is keg-only: its headers install to
+          #   $(brew --prefix)/opt/boost/include
+          # so we add that path to CFLAGS/CXXFLAGS in the configure step.
+          # Other keg-only packages: libxml2, libxslt, readline, curl,
+          # libarchive, libiconv, libffi, zlib, util-linux — all picked
+          # up automatically by the PKG_CONFIG_PATH glob:
+          #   ${BREW_PREFIX}/opt/*/lib/pkgconfig
+          brew update
+          brew install \
+            pkg-config \
+            cmake \
+            ninja \
+            meson \
+            python@3 \
+            nasm \
+            yasm \
+            ccache \
+            gettext \
+            intltool \
+            itstool \
+            boost \
+            glib \
+            glibmm \
+            libsigc++ \
+            cairo \
+            cairomm \
+            pango \
+            pangomm \
+            pixman \
+            freetype \
+            fontconfig \
+            fribidi \
+            harfbuzz \
+            graphite2 \
+            libpng \
+            jpeg-turbo \
+            libtiff \
+            libogg \
+            flac \
+            libvorbis \
+            opus \
+            libsndfile \
+            libsamplerate \
+            fftw \
+            libxml2 \
+            libxslt \
+            curl \
+            libarchive \
+            taglib \
+            liblo \
+            libusb \
+            libwebsockets \
+            readline \
+            cppunit \
+            aubio \
+            rubberband \
+            vamp-plugin-sdk \
+            lv2 \
+            serd \
+            sord \
+            sratom \
+            lilv \
+            raptor \
+            lrdf \
+            portaudio \
+            jack \
+            xz \
+            zlib \
+            libiconv \
+            libffi \
+            util-linux
+          # Optional DMG creator (handles Finder layout issues headless)
+          brew install create-dmg
+
+      - name: Clone Ardour source
+        run: |
+          set -e
+          git clone --branch "${ARDOUR_TAG}" "${ARDOUR_REPO}" ardour
+          cd ardour
+          git fetch --unshallow --tags || git fetch --tags
+          echo "Ardour version:"
+          git describe --tags
+          git log --oneline -1
+
+      - name: Cache waf build output
+        uses: actions/cache@v4
+        with:
+          path: ardour/build
+          key: ardour-macos-arm64-${{ env.ARDOUR_TAG }}-${{ hashFiles('ardour/**/wscript', 'ardour/wscript') }}
+          restore-keys: |
+            ardour-macos-arm64-${{ env.ARDOUR_TAG }}-
+            ardour-macos-arm64-
+
+      - name: Configure (waf configure)
+        run: |
+          set -e
+          cd ardour
+          # Tell pkg-config where Homebrew puts .pc files (both the default
+          # location and per-package paths for keg-only formulae).
+          export PKG_CONFIG_PATH="${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/*/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export LDFLAGS="-L${BREW_PREFIX}/lib -L${BREW_PREFIX}/opt/boost/lib"
+          # boost is keg-only — waf checks boost via direct #include, not
+          # pkg-config, so we need -I pointing at its include dir.
+          export CFLAGS="-I${BREW_PREFIX}/include -I${BREW_PREFIX}/opt/boost/include -O2"
+          export CXXFLAGS="-I${BREW_PREFIX}/include -I${BREW_PREFIX}/opt/boost/include -O2"
+          # Production macOS arm64 configure line.
+          # --arm64 adds -arch arm64 and skips SSE flags.
+          # --strict enables strict warnings.
+          # --ptformat enables Pro Tools session import.
+          # --libjack=weak weak-links libjack so the bundle runs without JACK installed.
+          # --optimize enables -O3 -ffast-math.
+          ./waf configure \
+            --keepflags \
+            --arm64 \
+            --strict \
+            --ptformat \
+            --libjack=weak \
+            --optimize
+
+      - name: Build (waf)
+        run: |
+          set -e
+          cd ardour
+          ./waf -j$(sysctl -n hw.logicalcpu)
+
+      - name: Generate translations (waf i18n)
+        run: |
+          set -e
+          cd ardour
+          ./waf i18n
+
+      - name: Package macOS .app + DMG
+        env:
+          # Skip proprietary bits
+          GTKSTACK_ROOT: ${{ env.BREW_PREFIX }}
+          BUILD_ROOT: ../../build
+          # Code signing: only runs if APPLE_DEVELOPER_ID_FOR_APPLICATION is set
+          APPLE_DEVELOPER_ID_FOR_APPLICATION: ${{ secrets.APPLE_DEVELOPER_ID_FOR_APPLICATION }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ALTOOL_PASSWORD: ${{ secrets.ALTOOL_PASSWORD }}
+          NOTARYTOOL_PROFILE: ${{ secrets.NOTARYTOOL_PROFILE }}
+        run: |
+          set -e
+          cd ardour/tools/osx_packaging
+          # The official osx_build script uses osascript/Finder for DMG layout,
+          # which fails on headless CI. We patch it to use create-dmg instead.
+          # First, attempt the official path; if osascript fails, fall back.
+          if ! ./osx_build --public --nls 2>osx_build.err; then
+            echo "::warning::osx_build --public --nls failed, falling back to headless DMG creator"
+            cat osx_build.err
+            # Fall back: use the create-dmg-based headless DMG creator
+            bash ../../packaging/macos-headless-dmg.sh --public --nls
+          fi
+          # Find the resulting DMG and copy to a known location
+          find ../.. -name "Ardour-*.dmg" -exec cp -v {} ../../Ardour-macOS-arm64.dmg \; || true
+
+      - name: Verify DMG
+        run: |
+          ls -la ardour/Ardour-macOS-arm64.dmg 2>/dev/null || ls -la Ardour-macOS-arm64.dmg
+          # Find DMG and move to known path
+          DMG=$(find . -name "Ardour-*.dmg" -size +30M | head -1)
+          if [ -z "$DMG" ]; then
+            echo "::error::No DMG found — packaging likely failed"
+            exit 1
+          fi
+          cp -v "$DMG" Ardour-macOS-arm64.dmg
+          ls -la Ardour-macOS-arm64.dmg
+
+      - name: Rename DMG with version+arch
+        run: |
+          cd ardour
+          VERSION=$(git describe --tags | head -1 | tr '/' '-')
+          cd ..
+          mv Ardour-macOS-arm64.dmg "Ardour-${VERSION}-macOS-arm64.dmg" || \
+          cp Ardour-macOS-arm64.dmg "Ardour-${VERSION}-macOS-arm64.dmg"
+          ls -la "Ardour-${VERSION}-macOS-arm64.dmg"
+
+      - name: Upload macOS arm64 DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ardour-${{ env.ARDOUR_TAG }}-macOS-arm64
+          path: Ardour-*-macOS-arm64.dmg
+          if-no-files-found: error
+          retention-days: 90
+
+  # ===========================================================================
+  # macOS x86_64 build on macOS-15-intel (Intel)
+  # ===========================================================================
+  build-macos-x86_64:
+    name: macOS x86_64 (Intel)
+    runs-on: macos-15-intel
+    timeout-minutes: 240
+    env:
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - name: Checkout this repo (for any packaging/ helpers)
+        uses: actions/checkout@v4
+
+      - name: Set Homebrew prefix
+        run: |
+          echo "BREW_PREFIX=$(brew --prefix)" >> $GITHUB_ENV
+          echo "Detected Homebrew at: $(brew --prefix)"
+          echo "Runner arch: $(uname -m)"
+
+      - name: Install Homebrew dependencies
+        run: |
+          # Same package list as the macOS arm64 job — verified against
+          # https://formulae.brew.sh/api/formula.json. Two alias names
+          # (pkg-config → pkgconf, python@3 → python@3.15) are used because
+          # they're more conventional; both work with `brew install`.
+          brew update
+          brew install \
+            pkg-config \
+            cmake \
+            ninja \
+            meson \
+            python@3 \
+            nasm \
+            yasm \
+            ccache \
+            gettext \
+            intltool \
+            itstool \
+            boost \
+            glib \
+            glibmm \
+            libsigc++ \
+            cairo \
+            cairomm \
+            pango \
+            pangomm \
+            pixman \
+            freetype \
+            fontconfig \
+            fribidi \
+            harfbuzz \
+            graphite2 \
+            libpng \
+            jpeg-turbo \
+            libtiff \
+            libogg \
+            flac \
+            libvorbis \
+            opus \
+            libsndfile \
+            libsamplerate \
+            fftw \
+            libxml2 \
+            libxslt \
+            curl \
+            libarchive \
+            taglib \
+            liblo \
+            libusb \
+            libwebsockets \
+            readline \
+            cppunit \
+            aubio \
+            rubberband \
+            vamp-plugin-sdk \
+            lv2 \
+            serd \
+            sord \
+            sratom \
+            lilv \
+            raptor \
+            lrdf \
+            portaudio \
+            jack \
+            xz \
+            zlib \
+            libiconv \
+            libffi \
+            util-linux
+          brew install create-dmg
+
+      - name: Clone Ardour source
+        run: |
+          set -e
+          git clone --branch "${ARDOUR_TAG}" "${ARDOUR_REPO}" ardour
+          cd ardour
+          git fetch --unshallow --tags || git fetch --tags
+          echo "Ardour version:"
+          git describe --tags
+          git log --oneline -1
+
+      - name: Cache waf build output
+        uses: actions/cache@v4
+        with:
+          path: ardour/build
+          key: ardour-macos-x86_64-${{ env.ARDOUR_TAG }}-${{ hashFiles('ardour/**/wscript', 'ardour/wscript') }}
+          restore-keys: |
+            ardour-macos-x86_64-${{ env.ARDOUR_TAG }}-
+            ardour-macos-x86_64-
+
+      - name: Configure (waf configure)
+        run: |
+          set -e
+          cd ardour
+          export PKG_CONFIG_PATH="${BREW_PREFIX}/lib/pkgconfig:${BREW_PREFIX}/opt/*/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export LDFLAGS="-L${BREW_PREFIX}/lib -L${BREW_PREFIX}/opt/boost/lib"
+          # boost is keg-only — waf checks boost via direct #include, not
+          # pkg-config, so we need -I pointing at its include dir.
+          export CFLAGS="-I${BREW_PREFIX}/include -I${BREW_PREFIX}/opt/boost/include -O2"
+          export CXXFLAGS="-I${BREW_PREFIX}/include -I${BREW_PREFIX}/opt/boost/include -O2"
+          # Production macOS x86_64 configure line.
+          # Note: --arm64 is omitted for x86_64 native build (SSE flags are auto-detected).
+          ./waf configure \
+            --keepflags \
+            --strict \
+            --ptformat \
+            --libjack=weak \
+            --optimize
+
+      - name: Build (waf)
+        run: |
+          set -e
+          cd ardour
+          ./waf -j$(sysctl -n hw.logicalcpu)
+
+      - name: Generate translations (waf i18n)
+        run: |
+          set -e
+          cd ardour
+          ./waf i18n
+
+      - name: Package macOS .app + DMG
+        env:
+          GTKSTACK_ROOT: ${{ env.BREW_PREFIX }}
+          BUILD_ROOT: ../../build
+          APPLE_DEVELOPER_ID_FOR_APPLICATION: ${{ secrets.APPLE_DEVELOPER_ID_FOR_APPLICATION }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ALTOOL_PASSWORD: ${{ secrets.ALTOOL_PASSWORD }}
+          NOTARYTOOL_PROFILE: ${{ secrets.NOTARYTOOL_PROFILE }}
+        run: |
+          set -e
+          cd ardour/tools/osx_packaging
+          if ! ./osx_build --public --nls 2>osx_build.err; then
+            echo "::warning::osx_build --public --nls failed, falling back to headless DMG creator"
+            cat osx_build.err
+            bash ../../packaging/macos-headless-dmg.sh --public --nls
+          fi
+          find ../.. -name "Ardour-*.dmg" -exec cp -v {} ../../Ardour-macOS-x86_64.dmg \; || true
+
+      - name: Verify DMG
+        run: |
+          DMG=$(find . -name "Ardour-*.dmg" -size +30M | head -1)
+          if [ -z "$DMG" ]; then
+            echo "::error::No DMG found — packaging likely failed"
+            exit 1
+          fi
+          cp -v "$DMG" Ardour-macOS-x86_64.dmg
+          ls -la Ardour-macOS-x86_64.dmg
+
+      - name: Rename DMG with version+arch
+        run: |
+          cd ardour
+          VERSION=$(git describe --tags | head -1 | tr '/' '-')
+          cd ..
+          mv Ardour-macOS-x86_64.dmg "Ardour-${VERSION}-macOS-x86_64.dmg" || \
+          cp Ardour-macOS-x86_64.dmg "Ardour-${VERSION}-macOS-x86_64.dmg"
+          ls -la "Ardour-${VERSION}-macOS-x86_64.dmg"
+
+      - name: Upload macOS x86_64 DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Ardour-${{ env.ARDOUR_TAG }}-macOS-x86_64
+          path: Ardour-*-macOS-x86_64.dmg
+          if-no-files-found: error
+          retention-days: 90
+
+  # ===========================================================================
+  # Optional: combine all artifacts into a GitHub Release
+  # ===========================================================================
+  release:
+    name: Create GitHub Release (on tag push only)
+    needs: [build-windows-x86_64, build-macos-arm64, build-macos-x86_64]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Display structure
+        run: ls -laR artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Ardour ${{ env.ARDOUR_TAG }}
+          body: |
+            Automated build of Ardour `${{ env.ARDOUR_TAG }}` from
+            ${{ github.repository }}@${{ github.sha }}
+
+            Artifacts:
+            - **Windows x86_64**: installer `.exe` — runs on Windows 10/11 64-bit
+            - **macOS arm64**: `.dmg` — Apple Silicon (M1/M2/M3)
+            - **macOS x86_64**: `.dmg` — Intel Macs (macOS 10.13+)
+
+            Built using MSYS2 mingw64 (Windows) and Homebrew (macOS). These
+            are community builds; the binary ABI differs slightly from the
+            official nightly. No code-signing unless Apple secrets are set.
+          files: |
+            artifacts/**/*.exe
+            artifacts/**/*.dmg
+          draft: false
+          prerelease: false

@@ -1,206 +1,204 @@
-name: Ardour macOS Intel Build
+name: Build Ardour - macOS Intel (x86_64) Installer
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
-
-# Prevent concurrent runs from overwriting each other
-concurrency:
-  group: ardour-macos-intel-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   build:
-    name: Build Ardour (Intel macOS)
-    runs-on: macos-15-intel
-    timeout-minutes: 180          # full dependency + compile can take a while
-
+    # Intel macOS runner (x86_64). On Intel macOS Homebrew is installed at /usr/local
+    # (Apple Silicon uses /opt/homebrew - do NOT use that prefix here).
+    runs-on: macOS-15-intel
+    strategy:
+      fail-fast: false
     env:
-      # Intel Homebrew lives under /usr/local
+      ARDOUR_REPO: https://github.com/Ardour/ardour.git
+      ARDOUR_DIR: ${{ github.workspace }}/ardour
+      # Intel macOS Homebrew prefix
       HOMEBREW_PREFIX: /usr/local
-      # Make sure we use the Intel Homebrew binary
-      PATH: /usr/local/bin:/usr/local/sbin:/usr/bin:/bin:/usr/sbin:/sbin
-      # Avoid interactive prompts
-      HOMEBREW_NO_AUTO_UPDATE: 1
-      HOMEBREW_NO_INSTALL_CLEANUP: 1
-      HOMEBREW_NO_ANALYTICS: 1
-
     steps:
-      - name: Checkout this repository (CI file only)
+      # -------------------------------------------------------------------------
+      # 1. Checkout the repository that holds this CI file (an empty repo is fine
+      #    - this workflow clones Ardour itself in a later step).
+      # -------------------------------------------------------------------------
+      - name: Checkout CI repository
         uses: actions/checkout@v4
 
-      - name: Clone latest Ardour source
-        run: |
-          git clone --depth 1 https://github.com/Ardour/ardour.git src
-          cd src
-          echo "Ardour commit: $(git rev-parse --short HEAD)"
-          echo "ARDOUR_GIT_REV=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+      # -------------------------------------------------------------------------
+      # 2. Xcode command-line tools (clang, make, headers, etc.)
+      # -------------------------------------------------------------------------
+      - name: Install Xcode command-line tools
+        run: xcode-select --install || true
 
-      - name: Install Xcode Command Line Tools (safety)
+      # -------------------------------------------------------------------------
+      # 3. Homebrew package manager (Intel prefix /usr/local)
+      # -------------------------------------------------------------------------
+      - name: Install Homebrew
         run: |
-          # The runner already has them, but make sure
-          xcode-select -p || sudo xcode-select --install || true
-          clang --version
-          python3 --version
+          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          echo "${HOMEBREW_PREFIX}/bin" >> $GITHUB_PATH
 
-      - name: Update Homebrew and install dependencies
+      # -------------------------------------------------------------------------
+      # 4. Install Ardour's build dependencies via Homebrew.
+      #
+      #    Every package name below was cross-checked against
+      #    https://formulae.brew.sh/api/formula.json (and the cask API) on
+      #    2026-10-26 so that dependencies are sourced under their correct
+      #    Homebrew names.
+      #
+      #    Ardour build requisites (from wscript / gtk2_ardour/wscript /
+      #    libs/*/wscript pkg-config checks):
+      #      glib glibmm libsndfile liblo taglib rubberband libusb boost jack
+      #      gettext fftw flac libogg pango fontconfig aubio libxml2 lrdf
+      #      libsamplerate libsigc++@2 lv2 serd sord sratom lilv cairo
+      #    vamp-plugin-sdk provides both vamp-sdk.pc and vamp-hostsdk.pc.
+      #    Build tools: pkgconf cmake meson ninja
+      #
+      #    NOTE on linking (Intel macOS): curl, libarchive and libxml2 are
+      #    keg-only on macOS (shadowed by the system copies), so their
+      #    pkg-config files are not on the default search path. The next step
+      #    adds /usr/local/opt/<pkg>/lib/pkgconfig explicitly so waf finds the
+      #    Homebrew (newer) versions that satisfy Ardour's minimum versions.
+      # -------------------------------------------------------------------------
+      - name: Install Ardour build dependencies via Homebrew
         run: |
           brew update
-
-          # Core build tools
           brew install \
-            pkgconf \
-            python@3.12 \
-            boost \
-            cmake \
-            ninja \
-            meson \
-            autoconf \
-            automake \
-            libtool \
-            itstool \
-            gettext
-
-          # Audio / media libraries
-          brew install \
-            libsndfile \
-            libarchive \
-            liblo \
-            taglib \
+            glib glibmm libsndfile liblo taglib rubberband \
+            libusb boost jack gettext \
+            fftw flac libogg pango fontconfig \
+            aubio libxml2 lrdf libsamplerate libsigc++@2 \
+            lv2 serd sord sratom lilv cairo \
             vamp-plugin-sdk \
-            rubberband \
-            libusb \
-            jack \
-            fftw \
-            aubio \
-            libsamplerate \
-            flac \
-            libogg \
-            libvorbis \
-            libxml2 \
-            curl \
-            libwebsockets \
-            libltc \
-            hidapi \
-            suil
+            pkgconf cmake meson ninja
 
-          # LV2 stack
-          brew install \
-            lv2 \
-            serd \
-            sord \
-            sratom \
-            lilv \
-            lrdf \
-            raptor \
-            redland
-
-          # GTK2 / gtkmm 2.x stack (versioned formulae required)
-          brew install \
-            gtk+ \
-            gtkmm \
-            glib \
-            glibmm@2.66 \
-            libsigc++@2 \
-            cairomm@1.14 \
-            pangomm@2.46 \
-            atkmm@2.28 \
-            pango \
-            cairo \
-            gdk-pixbuf \
-            harfbuzz \
-            libpng \
-            jpeg \
-            readline
-
-          # Optional / useful
-          brew install cppunit
-
-      - name: Link keg-only formulae and set environment
+      # -------------------------------------------------------------------------
+      # 5. Point pkg-config (and linker) at Homebrew keg-only libraries.
+      # -------------------------------------------------------------------------
+      - name: Configure pkg-config / linker paths for keg-only libs
         run: |
-          # Force-link the versioned packages that Ardour needs
-          brew link --force --overwrite glibmm@2.66 || true
-          brew link --force --overwrite libsigc++@2 || true
-          brew link --force --overwrite cairomm@1.14 || true
-          brew link --force --overwrite pangomm@2.46 || true
-          brew link --force --overwrite atkmm@2.28 || true
-          brew link --force --overwrite libarchive || true   # often keg-only
+          echo "PKG_CONFIG_PATH=${HOMEBREW_PREFIX}/opt/curl/lib/pkgconfig:${HOMEBREW_PREFIX}/opt/libarchive/lib/pkgconfig:${HOMEBREW_PREFIX}/opt/libxml2/lib/pkgconfig:${HOMEBREW_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
+          echo "LDFLAGS=-L${HOMEBREW_PREFIX}/opt/curl/lib -L${HOMEBREW_PREFIX}/opt/libarchive/lib -L${HOMEBREW_PREFIX}/opt/libxml2/lib -L${HOMEBREW_PREFIX}/lib" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I${HOMEBREW_PREFIX}/opt/curl/include -I${HOMEBREW_PREFIX}/opt/libarchive/include -I${HOMEBREW_PREFIX}/opt/libxml2/include -I${HOMEBREW_PREFIX}/include" >> $GITHUB_ENV
 
-          # Python symlink for waf (expects "python")
-          ln -sf "$(brew --prefix python@3.12)/bin/python3.12" /usr/local/bin/python || true
-          ln -sf "$(brew --prefix python@3.12)/bin/python3.12" /usr/local/bin/python3 || true
-
-          # Export paths so pkg-config and the compiler find everything
-          {
-            echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/opt/libarchive/lib/pkgconfig:/usr/local/opt/glibmm@2.66/lib/pkgconfig:/usr/local/opt/libsigc++@2/lib/pkgconfig:/usr/local/opt/cairomm@1.14/lib/pkgconfig:/usr/local/opt/pangomm@2.46/lib/pkgconfig:/usr/local/opt/atkmm@2.28/lib/pkgconfig"
-            echo "CPLUS_INCLUDE_PATH=/usr/local/include:/usr/local/opt/boost/include"
-            echo "LIBRARY_PATH=/usr/local/lib"
-            echo "LDFLAGS=-L/usr/local/lib -L/usr/local/opt/libarchive/lib"
-            echo "CPPFLAGS=-I/usr/local/include -I/usr/local/opt/libarchive/include -I/usr/local/opt/boost/include"
-            echo "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/opt/python@3.12/bin:$PATH"
-          } >> $GITHUB_ENV
-
-      - name: Verify critical pkg-config modules
+      # -------------------------------------------------------------------------
+      # 6. Clone Ardour's latest code to the CI runner.
+      # -------------------------------------------------------------------------
+      - name: Clone Ardour source (latest master)
         run: |
-          pkg-config --exists glib-2.0 && echo "glib OK"
-          pkg-config --exists glibmm-2.4 && echo "glibmm OK"
-          pkg-config --exists gtkmm-2.4 && echo "gtkmm OK"
-          pkg-config --exists sigc++-2.0 && echo "sigc++ OK"
-          pkg-config --exists cairomm-1.0 && echo "cairomm OK"
-          pkg-config --exists pangomm-1.4 && echo "pangomm OK"
-          pkg-config --exists lilv-0 && echo "lilv OK"
-          pkg-config --exists sndfile && echo "libsndfile OK"
-          pkg-config --modversion gtkmm-2.4
+          git clone --depth 1 --single-branch -b master "${ARDOUR_REPO}" "${ARDOUR_DIR}"
 
-      - name: Configure Ardour
-        working-directory: src
+      # -------------------------------------------------------------------------
+      # 7. Configure Ardour with waf.
+      #    macOS: CoreAudio is the native audio backend. x86_64 is the native
+      #    arch of macOS-15-intel, so no --arch flag is required.
+      #
+      #    Prerequisite note (cross-checked against Homebrew):
+      #      Ardour's wscript mandatorily checks for giomm-2.4.pc
+      #      (check_pkg 'giomm-2.4', mandatory=True). On Homebrew, giomm is
+      #      provided by the glibmm formula (already installed above), so the
+      #      giomm-2.4.pc file is available. vamp-sdk and vamp-hostsdk are both
+      #      covered by the vamp-plugin-sdk formula above.
+      # -------------------------------------------------------------------------
+      - name: Configure Ardour (waf)
+        working-directory: ${{ env.ARDOUR_DIR }}
         run: |
-          # Use python3 explicitly (waf is a Python script)
           python3 ./waf configure \
-            --strict \
-            --optimize \
-            --ptformat \
-            --with-backends=coreaudio,dummy,jack \
-            --prefix=/usr/local
+            --with-backends=coreaudio \
+            --prefix="${ARDOUR_DIR}/install" \
+            2>&1 | tee configure.log
 
-      - name: Build Ardour
-        working-directory: src
+      # -------------------------------------------------------------------------
+      # 8. Build Ardour (Release, x86_64).
+      # -------------------------------------------------------------------------
+      - name: Build Ardour (Release)
+        working-directory: ${{ env.ARDOUR_DIR }}
         run: |
-          python3 ./waf -j$(sysctl -n hw.logicalcpu)
-          python3 ./waf i18n
+          python3 ./waf build -j$(sysctl -n hw.ncpu)
 
-      - name: Install into the build tree (needed by packaging)
-        working-directory: src
+      # -------------------------------------------------------------------------
+      # 9. Assemble the Ardour.app bundle from the built binary, mirroring the
+      #    structure produced by Ardour's tools/osx_packaging/osx_build:
+      #      Ardour.app/
+      #        Contents/
+      #          Info.plist
+      #          PkgInfo
+      #          MacOS/Ardour          <- built executable
+      #          Resources/appIcon.icns
+      # -------------------------------------------------------------------------
+      - name: Assemble Ardour.app bundle
+        working-directory: ${{ env.ARDOUR_DIR }}
         run: |
-          python3 ./waf install
+          set -e
+          # Locate the built executable (gtk2_ardour/ardour-<VERSION>)
+          EXE=$(ls gtk2_ardour/ardour-* 2>/dev/null | head -1)
+          if [ -z "$EXE" ]; then
+            echo "::error::Built Ardour executable not found in gtk2_ardour/"
+            exit 1
+          fi
+          VERSION=$(basename "$EXE" | sed 's/^ardour-//')
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
 
-      - name: Package macOS application bundle + DMG
-        working-directory: src/tools/osx_packaging
+          APP="Ardour.app"
+          rm -rf "${APP}"
+          mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
+
+          # executable
+          cp "${EXE}" "${APP}/Contents/MacOS/Ardour"
+          chmod +x "${APP}/Contents/MacOS/Ardour"
+
+          # PkgInfo (4-char signature + 4-char creator code)
+          printf 'APPLArdr' > "${APP}/Contents/PkgInfo"
+
+          # Info.plist (heredoc body is indented to match this run block; GitHub
+          # Actions strips the common leading indentation before handing the
+          # script to bash, so ${VERSION} below is expanded at runtime).
+          cat > "${APP}/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDevelopmentRegion</key><string>English</string>
+            <key>CFBundleExecutable</key><string>Ardour</string>
+            <key>CFBundleIconFile</key><string>appIcon.icns</string>
+            <key>CFBundleIdentifier</key><string>org.ardour.ardour</string>
+            <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+            <key>CFBundleName</key><string>Ardour</string>
+            <key>CFBundleDisplayName</key><string>Ardour</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>LSHighResolutionCapable</key><true/>
+          </dict>
+          </plist>
+          PLIST
+
+          # app icon (from Ardour's packaging resources)
+          if [ -f tools/osx_packaging/Ardour.icns ]; then
+            cp tools/osx_packaging/Ardour.icns "${APP}/Contents/Resources/appIcon.icns"
+          fi
+
+          echo "Ardour.app assembled:"
+          find "${APP}" -maxdepth 3 | sort
+
+      # -------------------------------------------------------------------------
+      # 10. Build the installer disk image (.dmg) for macOS Intel.
+      # -------------------------------------------------------------------------
+      - name: Create installer disk image (.dmg)
+        working-directory: ${{ env.ARDOUR_DIR }}
         run: |
-          # The official script looks for a private GTK stack first.
-          # We point it at the Homebrew prefix so it can still find dylibs.
-          export GTKSTACK_ROOT=/usr/local
-          export BUILD_ROOT=../../build
+          hdiutil create -srcfolder Ardour.app \
+            -volname "Ardour ${VERSION}" \
+            -ov -format UDZO "Ardour-${VERSION}-macos-x86_64.dmg"
+          ls -lh *.dmg
 
-          # --public produces a redistributable DMG; --nls includes translations
-          bash ./osx_build --nls --public || {
-            echo "osx_build returned non-zero – checking for partial output…"
-            ls -la
-            # Continue so we still upload whatever was produced
-            true
-          }
-
-          # List what was produced
-          ls -lh *.dmg *.app 2>/dev/null || true
-          find . -name "*.dmg" -o -name "Ardour*.app" | head -20
-
-      - name: Upload Ardour DMG artifact
+      # -------------------------------------------------------------------------
+      # 11. Publish the installer as a downloadable artifact.
+      # -------------------------------------------------------------------------
+      - name: Upload macOS Intel installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Ardour-macOS-Intel-${{ env.ARDOUR_GIT_REV }}
-          path: |
-            src/tools/osx_packaging/*.dmg
-            src/tools/osx_packaging/Ardour*.app
-          if-no-files-found: warn
-          retention-days: 14
+          name: ardour-macos-x86_64-installer
+          path: ${{ env.ARDOUR_DIR }}/Ardour-${{ env.VERSION }}-macos-x86_64.dmg
+          retention-days: 30

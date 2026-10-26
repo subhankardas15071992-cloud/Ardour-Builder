@@ -66,17 +66,18 @@ jobs:
       #    (checked 2026-10-26). Ardour build requisites (from wscript /
       #    gtk2_ardour/wscript / libs/*/wscript pkg-config checks):
       #
-      #      glib2 glibmm libsndfile liblo taglib rubberband libusb boost jack
+      #      glib2 glibmm-2.4 libsndfile liblo taglib rubberband libusb boost jack
       #      gettext fftw-3 flac libogg pango fontconfig aubio libxml2
       #      libsamplerate cairo serd sord sratom lv2 lilv curl libarchive
       #
+      #    NOTE: Ardour's wscript checks for 'glibmm-2.4' (glibmm-2.4.pc),
+      #    which is provided by the MacPorts port 'glibmm-2.4' — NOT by the
+      #    'glibmm' port (which ships a different soname and no glibmm-2.4.pc).
       #    Build tools supplied by MacPorts: pkgconfig cmake meson ninja
       #    (pkgconf is intentionally NOT installed: the runner already has
       #     pkgconfig active, and pkgconf conflicts with it.)
       #
       #    KNOWN GAPS (mandatory Ardour checks NOT available as MacPorts ports):
-      #      - giomm-2.4.pc  -> no "giomm" port on MacPorts (glibmm is installed
-      #        above but may not ship giomm-2.4.pc)
       #      - lrdf          -> no "lrdf" port on MacPorts
       #      - sigc++-2.0    -> no "libsigc++2" port on MacPorts
       #      - vamp-sdk / vamp-hostsdk -> no "vamp-plugin-sdk" port on MacPorts
@@ -89,7 +90,7 @@ jobs:
       - name: Install Ardour build dependencies via MacPorts
         run: |
           sudo port install \
-            glib2 glibmm libsndfile liblo taglib rubberband \
+            glib2 glibmm-2.4 libsndfile liblo taglib rubberband \
             libusb boost jack gettext \
             fftw-3 flac libogg pango fontconfig \
             aubio libxml2 libsamplerate cairo \

@@ -1,4 +1,4 @@
-name: Build Ardour - macOS Intel (x86_64) Installer
+name: Build Ardour - macOS Intel (x86_64) Installer via MacPorts
 
 on:
   push:
@@ -7,16 +7,20 @@ on:
 
 jobs:
   build:
-    # Intel macOS runner (x86_64). On Intel macOS Homebrew is installed at /usr/local
-    # (Apple Silicon uses /opt/homebrew - do NOT use that prefix here).
+    # Intel macOS runner (x86_64). Homebrew does NOT support Intel macOS
+    # (the official installer aborts: "Homebrew on macOS is only supported on
+    # Apple Silicon processors!"), so MacPorts is used instead. MacPorts
+    # installs to /opt/local on Intel macOS.
+    #
+    # NOTE: runner label must be exactly "macos-15-intel" (case-sensitive).
     runs-on: macos-15-intel
     strategy:
       fail-fast: false
     env:
       ARDOUR_REPO: https://github.com/Ardour/ardour.git
       ARDOUR_DIR: ${{ github.workspace }}/ardour
-      # Intel macOS Homebrew prefix
-      HOMEBREW_PREFIX: /usr/local
+      # MacPorts prefix on Intel macOS
+      MACPORTS_PREFIX: /opt/local
     steps:
       # -------------------------------------------------------------------------
       # 1. Checkout the repository that holds this CI file (an empty repo is fine
@@ -32,74 +36,87 @@ jobs:
         run: xcode-select --install || true
 
       # -------------------------------------------------------------------------
-      # 3. Homebrew package manager (Intel prefix /usr/local)
+      # 3. Install MacPorts (Intel macOS prefix /opt/local).
+      #
+      #    The MacPorts .pkg for macOS 15 Sequoia must be downloaded from the
+      #    MacPorts project. Verify the exact package URL for macOS 15 / Intel
+      #    at https://github.com/macports/macports-base/releases and update the
+      #    URL below if it changes.
       # -------------------------------------------------------------------------
-      - name: Install Homebrew
+      - name: Install MacPorts
         run: |
-          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          echo "${HOMEBREW_PREFIX}/bin" >> $GITHUB_PATH
+          # macOS 15 (Sequoia), Intel (x86_64) MacPorts installer package
+          curl -fsSL -o MacPorts.pkg \
+            "https://github.com/macports/macports-base/releases/download/v2.9.3/MacPorts-2.9.3-15-Sequoia.pkg"
+          sudo installer -pkg MacPorts.pkg -target /
+          echo "${MACPORTS_PREFIX}/bin" >> $GITHUB_PATH
+          echo "${MACPORTS_PREFIX}/sbin" >> $GITHUB_PATH
 
       # -------------------------------------------------------------------------
-      # 4. Install Ardour's build dependencies via Homebrew.
-      #
-      #    Every package name below was cross-checked against
-      #    https://formulae.brew.sh/api/formula.json (and the cask API) on
-      #    2026-10-26 so that dependencies are sourced under their correct
-      #    Homebrew names.
-      #
-      #    Ardour build requisites (from wscript / gtk2_ardour/wscript /
-      #    libs/*/wscript pkg-config checks):
-      #      glib glibmm libsndfile liblo taglib rubberband libusb boost jack
-      #      gettext fftw flac libogg pango fontconfig aubio libxml2 lrdf
-      #      libsamplerate libsigc++@2 lv2 serd sord sratom lilv cairo
-      #    vamp-plugin-sdk provides both vamp-sdk.pc and vamp-hostsdk.pc.
-      #    Build tools: pkgconf cmake meson ninja
-      #
-      #    NOTE on linking (Intel macOS): curl, libarchive and libxml2 are
-      #    keg-only on macOS (shadowed by the system copies), so their
-      #    pkg-config files are not on the default search path. The next step
-      #    adds /usr/local/opt/<pkg>/lib/pkgconfig explicitly so waf finds the
-      #    Homebrew (newer) versions that satisfy Ardour's minimum versions.
+      # 4. Sync MacPorts ports tree.
       # -------------------------------------------------------------------------
-      - name: Install Ardour build dependencies via Homebrew
+      - name: Sync MacPorts
         run: |
-          brew update
-          brew install \
-            glib glibmm libsndfile liblo taglib rubberband \
+          sudo port selfupdate
+
+      # -------------------------------------------------------------------------
+      # 5. Install Ardour's build dependencies via MacPorts.
+      #
+      #    Port names verified against https://ports.macports.org/search/
+      #    (checked 2026-10-26). Ardour build requisites (from wscript /
+      #    gtk2_ardour/wscript / libs/*/wscript pkg-config checks):
+      #
+      #      glib2 glibmm libsndfile liblo taglib rubberband libusb boost jack
+      #      gettext fftw-3 flac libogg pango fontconfig aubio libxml2
+      #      libsamplerate cairo serd sord sratom lv2 lilv curl libarchive
+      #
+      #    Build tools supplied by MacPorts: pkgconf cmake meson ninja
+      #
+      #    KNOWN GAPS (mandatory Ardour checks NOT available as MacPorts ports):
+      #      - giomm-2.4.pc  -> no "giomm" port on MacPorts (glibmm is installed
+      #        above but may not ship giomm-2.4.pc)
+      #      - lrdf          -> no "lrdf" port on MacPorts
+      #      - sigc++-2.0    -> no "libsigc++2" port on MacPorts
+      #      - vamp-sdk / vamp-hostsdk -> no "vamp-plugin-sdk" port on MacPorts
+      #
+      #    Because Ardour's wscript checks these as mandatory=True,
+      #    `./waf configure` will stop at the first missing one. These would
+      #    need to be built from source or the wscript checks relaxed before
+      #    the build can complete on MacPorts.
+      # -------------------------------------------------------------------------
+      - name: Install Ardour build dependencies via MacPorts
+        run: |
+          sudo port install \
+            glib2 glibmm libsndfile liblo taglib rubberband \
             libusb boost jack gettext \
-            fftw flac libogg pango fontconfig \
-            aubio libxml2 lrdf libsamplerate libsigc++@2 \
-            lv2 serd sord sratom lilv cairo \
-            vamp-plugin-sdk \
+            fftw-3 flac libogg pango fontconfig \
+            aubio libxml2 libsamplerate cairo \
+            serd sord sratom lv2 lilv curl libarchive \
             pkgconf cmake meson ninja
 
       # -------------------------------------------------------------------------
-      # 5. Point pkg-config (and linker) at Homebrew keg-only libraries.
+      # 6. Point pkg-config (and linker) at MacPorts.
       # -------------------------------------------------------------------------
-      - name: Configure pkg-config / linker paths for keg-only libs
+      - name: Configure pkg-config / linker paths for MacPorts
         run: |
-          echo "PKG_CONFIG_PATH=${HOMEBREW_PREFIX}/opt/curl/lib/pkgconfig:${HOMEBREW_PREFIX}/opt/libarchive/lib/pkgconfig:${HOMEBREW_PREFIX}/opt/libxml2/lib/pkgconfig:${HOMEBREW_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
-          echo "LDFLAGS=-L${HOMEBREW_PREFIX}/opt/curl/lib -L${HOMEBREW_PREFIX}/opt/libarchive/lib -L${HOMEBREW_PREFIX}/opt/libxml2/lib -L${HOMEBREW_PREFIX}/lib" >> $GITHUB_ENV
-          echo "CPPFLAGS=-I${HOMEBREW_PREFIX}/opt/curl/include -I${HOMEBREW_PREFIX}/opt/libarchive/include -I${HOMEBREW_PREFIX}/opt/libxml2/include -I${HOMEBREW_PREFIX}/include" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=${MACPORTS_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}" >> $GITHUB_ENV
+          echo "LDFLAGS=-L${MACPORTS_PREFIX}/lib" >> $GITHUB_ENV
+          echo "CPPFLAGS=-I${MACPORTS_PREFIX}/include" >> $GITHUB_ENV
 
       # -------------------------------------------------------------------------
-      # 6. Clone Ardour's latest code to the CI runner.
+      # 7. Clone Ardour's latest code to the CI runner.
       # -------------------------------------------------------------------------
       - name: Clone Ardour source (latest master)
         run: |
           git clone --depth 1 --single-branch -b master "${ARDOUR_REPO}" "${ARDOUR_DIR}"
 
       # -------------------------------------------------------------------------
-      # 7. Configure Ardour with waf.
+      # 8. Configure Ardour with waf.
       #    macOS: CoreAudio is the native audio backend. x86_64 is the native
       #    arch of macos-15-intel, so no --arch flag is required.
       #
-      #    Prerequisite note (cross-checked against Homebrew):
-      #      Ardour's wscript mandatorily checks for giomm-2.4.pc
-      #      (check_pkg 'giomm-2.4', mandatory=True). On Homebrew, giomm is
-      #      provided by the glibmm formula (already installed above), so the
-      #      giomm-2.4.pc file is available. vamp-sdk and vamp-hostsdk are both
-      #      covered by the vamp-plugin-sdk formula above.
+      #    See step 5 for the known mandatory-dependency gaps on MacPorts that
+      #    will cause waf configure to fail until resolved.
       # -------------------------------------------------------------------------
       - name: Configure Ardour (waf)
         working-directory: ${{ env.ARDOUR_DIR }}
@@ -110,7 +127,7 @@ jobs:
             2>&1 | tee configure.log
 
       # -------------------------------------------------------------------------
-      # 8. Build Ardour (Release, x86_64).
+      # 9. Build Ardour (Release, x86_64).
       # -------------------------------------------------------------------------
       - name: Build Ardour (Release)
         working-directory: ${{ env.ARDOUR_DIR }}
@@ -118,14 +135,14 @@ jobs:
           python3 ./waf build -j$(sysctl -n hw.ncpu)
 
       # -------------------------------------------------------------------------
-      # 9. Assemble the Ardour.app bundle from the built binary, mirroring the
-      #    structure produced by Ardour's tools/osx_packaging/osx_build:
-      #      Ardour.app/
-      #        Contents/
-      #          Info.plist
-      #          PkgInfo
-      #          MacOS/Ardour          <- built executable
-      #          Resources/appIcon.icns
+      # 10. Assemble the Ardour.app bundle from the built binary, mirroring the
+      #     structure produced by Ardour's tools/osx_packaging/osx_build:
+      #       Ardour.app/
+      #         Contents/
+      #           Info.plist
+      #           PkgInfo
+      #           MacOS/Ardour          <- built executable
+      #           Resources/appIcon.icns
       # -------------------------------------------------------------------------
       - name: Assemble Ardour.app bundle
         working-directory: ${{ env.ARDOUR_DIR }}
@@ -183,7 +200,7 @@ jobs:
           find "${APP}" -maxdepth 3 | sort
 
       # -------------------------------------------------------------------------
-      # 10. Build the installer disk image (.dmg) for macOS Intel.
+      # 11. Build the installer disk image (.dmg) for macOS Intel.
       # -------------------------------------------------------------------------
       - name: Create installer disk image (.dmg)
         working-directory: ${{ env.ARDOUR_DIR }}
@@ -194,7 +211,7 @@ jobs:
           ls -lh *.dmg
 
       # -------------------------------------------------------------------------
-      # 11. Publish the installer as a downloadable artifact.
+      # 12. Publish the installer as a downloadable artifact.
       # -------------------------------------------------------------------------
       - name: Upload macOS Intel installer artifact
         uses: actions/upload-artifact@v4

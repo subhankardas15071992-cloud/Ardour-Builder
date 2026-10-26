@@ -9,7 +9,7 @@ jobs:
   build:
     # Intel macOS runner (x86_64). On Intel macOS Homebrew is installed at /usr/local
     # (Apple Silicon uses /opt/homebrew - do NOT use that prefix here).
-    runs-on: macOS-15-intel
+    runs-on: macos-15-intel
     strategy:
       fail-fast: false
     env:
@@ -92,7 +92,7 @@ jobs:
       # -------------------------------------------------------------------------
       # 7. Configure Ardour with waf.
       #    macOS: CoreAudio is the native audio backend. x86_64 is the native
-      #    arch of macOS-15-intel, so no --arch flag is required.
+      #    arch of macos-15-intel, so no --arch flag is required.
       #
       #    Prerequisite note (cross-checked against Homebrew):
       #      Ardour's wscript mandatorily checks for giomm-2.4.pc

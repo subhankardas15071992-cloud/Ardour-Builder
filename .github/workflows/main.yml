@@ -73,7 +73,8 @@ jobs:
       #    NOTE: Ardour's wscript checks for 'glibmm-2.4' (glibmm-2.4.pc),
       #    which is provided by the MacPorts port 'glibmm-2.4' — NOT by the
       #    'glibmm' port (which ships a different soname and no glibmm-2.4.pc).
-      #    Build tools supplied by MacPorts: pkgconfig cmake meson ninja
+      #    Build tools supplied by MacPorts: pkgconfig cmake meson ninja mm-common
+      #    (mm-common is required by sigc++'s autogen.sh.)
       #    (pkgconf is intentionally NOT installed: the runner already has
       #     pkgconfig active, and pkgconf conflicts with it.)
       #
@@ -92,7 +93,7 @@ jobs:
             fftw-3 flac libogg pango fontconfig \
             aubio libxml2 libsamplerate cairo \
             serd sord sratom lv2 lilv curl libarchive \
-            pkgconfig cmake meson ninja
+            pkgconfig cmake meson ninja mm-common
 
       # -------------------------------------------------------------------------
       # 6. Build Ardour dependencies missing from MacPorts from source.

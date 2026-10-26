@@ -70,7 +70,9 @@ jobs:
       #      gettext fftw-3 flac libogg pango fontconfig aubio libxml2
       #      libsamplerate cairo serd sord sratom lv2 lilv curl libarchive
       #
-      #    Build tools supplied by MacPorts: pkgconf cmake meson ninja
+      #    Build tools supplied by MacPorts: pkgconfig cmake meson ninja
+      #    (pkgconf is intentionally NOT installed: the runner already has
+      #     pkgconfig active, and pkgconf conflicts with it.)
       #
       #    KNOWN GAPS (mandatory Ardour checks NOT available as MacPorts ports):
       #      - giomm-2.4.pc  -> no "giomm" port on MacPorts (glibmm is installed
@@ -92,7 +94,7 @@ jobs:
             fftw-3 flac libogg pango fontconfig \
             aubio libxml2 libsamplerate cairo \
             serd sord sratom lv2 lilv curl libarchive \
-            pkgconf cmake meson ninja
+            pkgconfig cmake meson ninja
 
       # -------------------------------------------------------------------------
       # 6. Point pkg-config (and linker) at MacPorts.

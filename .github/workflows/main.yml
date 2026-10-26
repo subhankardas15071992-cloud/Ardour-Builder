@@ -47,7 +47,7 @@ jobs:
         run: |
           # macOS 15 (Sequoia), Intel (x86_64) MacPorts installer package
           curl -fsSL -o MacPorts.pkg \
-            "https://github.com/macports/macports-base/releases/download/v2.9.3/MacPorts-2.9.3-15-Sequoia.pkg"
+            "https://github.com/macports/macports-base/releases/download/v2.12.7/MacPorts-2.12.7-15-Sequoia.pkg"
           sudo installer -pkg MacPorts.pkg -target /
           echo "${MACPORTS_PREFIX}/bin" >> $GITHUB_PATH
           echo "${MACPORTS_PREFIX}/sbin" >> $GITHUB_PATH

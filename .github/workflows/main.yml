@@ -78,14 +78,11 @@ jobs:
       #     pkgconfig active, and pkgconf conflicts with it.)
       #
       #    KNOWN GAPS (mandatory Ardour checks NOT available as MacPorts ports):
-      #      - lrdf          -> no "lrdf" port on MacPorts
-      #      - sigc++-2.0    -> no "libsigc++2" port on MacPorts
-      #      - vamp-sdk / vamp-hostsdk -> no "vamp-plugin-sdk" port on MacPorts
+      #      - none remaining: sigc++-2.0, lrdf, raptor2, and vamp-plugin-sdk
+      #        are now built from source in the next step.
       #
       #    Because Ardour's wscript checks these as mandatory=True,
-      #    `./waf configure` will stop at the first missing one. These would
-      #    need to be built from source or the wscript checks relaxed before
-      #    the build can complete on MacPorts.
+      #    `./waf configure` will stop at the first missing one.
       # -------------------------------------------------------------------------
       - name: Install Ardour build dependencies via MacPorts
         run: |
@@ -98,7 +95,86 @@ jobs:
             pkgconfig cmake meson ninja
 
       # -------------------------------------------------------------------------
-      # 6. Point pkg-config (and linker) at MacPorts.
+      # 6. Build Ardour dependencies missing from MacPorts from source.
+      #
+      #    The following Ardour dependencies are NOT available as MacPorts ports
+      #    and must be compiled from source into /opt/local:
+      #      - sigc++-2.0  (Ardour needs sigc++-2.0.pc; MacPorts only has sigc++-3.0)
+      #      - raptor2     (required by lrdf)
+      #      - lrdf        (RDF library for LADSPA plugin metadata)
+      #      - vamp-plugin-sdk  (provides vamp-sdk.pc + vamp-hostsdk.pc)
+      #
+      #    Source URLs (verified against the upstream Git repos you provided):
+      #      sigc++:   https://github.com/libsigcplusplus/libsigcplusplus.git
+      #      raptor2:  https://download.librdf.org/ (librdf project)
+      #      lrdf:     https://github.com/swh/LRDF.git
+      #      vamp:     https://github.com/vamp-plugins/vamp-plugin-sdk.git
+      # -------------------------------------------------------------------------
+      - name: Build missing dependencies from source
+        run: |
+          set -e
+          DEPS_DIR="${{ github.workspace }}/ardour-deps"
+          mkdir -p "${DEPS_DIR}"
+          cd "${DEPS_DIR}"
+
+          export PKG_CONFIG_PATH="${MACPORTS_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          export LDFLAGS="-L${MACPORTS_PREFIX}/lib"
+          export CPPFLAGS="-I${MACPORTS_PREFIX}/include"
+          export CFLAGS="-O2"
+          export CXXFLAGS="-O2"
+
+          # --- sigc++-2.0 (Ardour needs sigc++-2.0.pc, not sigc++-3.0) ---
+          echo "=== Building sigc++-2.0 from source ==="
+          curl -fsSL -o sigcplusplus-2.0.tar.gz \
+            "https://github.com/libsigcplusplus/libsigcplusplus/archive/refs/tags/2.10.0.tar.gz"
+          tar -xzf sigcplusplus-2.0.tar.gz
+          cd libsigcplusplus-*/
+          ./autogen.sh
+          ./configure --prefix="${MACPORTS_PREFIX}" --disable-shared --enable-static
+          make -j$(sysctl -n hw.ncpu)
+          sudo make install
+          cd "${DEPS_DIR}"
+
+          # --- raptor2 (required by lrdf) ---
+          echo "=== Building raptor2 from source ==="
+          curl -fsSL -o raptor2.tar.gz \
+            "https://download.librdf.org/source/raptor2-2.0.15.tar.gz"
+          tar -xzf raptor2.tar.gz
+          cd raptor2-*/
+          ./configure --prefix="${MACPORTS_PREFIX}" --disable-shared --enable-static
+          make -j$(sysctl -n hw.ncpu)
+          sudo make install
+          cd "${DEPS_DIR}"
+
+          # --- lrdf ---
+          echo "=== Building lrdf from source ==="
+          curl -fsSL -o lrdf.tar.gz \
+            "https://github.com/swh/LRDF/archive/refs/tags/v0.6.1.tar.gz"
+          tar -xzf lrdf.tar.gz
+          cd LRDF-*/
+          ./configure --prefix="${MACPORTS_PREFIX}" --disable-shared --enable-static \
+            PKG_CONFIG_PATH="${MACPORTS_PREFIX}/lib/pkgconfig"
+          make -j$(sysctl -n hw.ncpu)
+          sudo make install
+          cd "${DEPS_DIR}"
+
+          # --- vamp-plugin-sdk (provides vamp-sdk.pc + vamp-hostsdk.pc) ---
+          echo "=== Building vamp-plugin-sdk from source ==="
+          curl -fsSL -o vamp-plugin-sdk.tar.gz \
+            "https://github.com/vamp-plugins/vamp-plugin-sdk/archive/refs/tags/vamp-plugin-sdk-2.10.tar.gz"
+          tar -xzf vamp-plugin-sdk.tar.gz
+          cd vamp-plugin-sdk-*/
+          ./configure --prefix="${MACPORTS_PREFIX}" --disable-shared --enable-static \
+            PKG_CONFIG_PATH="${MACPORTS_PREFIX}/lib/pkgconfig"
+          make -j$(sysctl -n hw.ncpu)
+          sudo make install
+          cd "${DEPS_DIR}"
+
+          echo "=== Source-built dependencies complete ==="
+          find "${MACPORTS_PREFIX}/lib/pkgconfig" -name "*.pc" | sort
+
+      # -------------------------------------------------------------------------
+      # 7. Point pkg-config (and linker) at MacPorts (and source-built deps).
       # -------------------------------------------------------------------------
       - name: Configure pkg-config / linker paths for MacPorts
         run: |
@@ -107,14 +183,14 @@ jobs:
           echo "CPPFLAGS=-I${MACPORTS_PREFIX}/include" >> $GITHUB_ENV
 
       # -------------------------------------------------------------------------
-      # 7. Clone Ardour's latest code to the CI runner.
+      # 8. Clone Ardour's latest code to the CI runner.
       # -------------------------------------------------------------------------
       - name: Clone Ardour source (latest master)
         run: |
           git clone --depth 1 --single-branch -b master "${ARDOUR_REPO}" "${ARDOUR_DIR}"
 
       # -------------------------------------------------------------------------
-      # 8. Configure Ardour with waf.
+      # 9. Configure Ardour with waf.
       #    macOS: CoreAudio is the native audio backend. x86_64 is the native
       #    arch of macos-15-intel, so no --arch flag is required.
       #
@@ -130,7 +206,7 @@ jobs:
             2>&1 | tee configure.log
 
       # -------------------------------------------------------------------------
-      # 9. Build Ardour (Release, x86_64).
+      # 10. Build Ardour (Release, x86_64).
       # -------------------------------------------------------------------------
       - name: Build Ardour (Release)
         working-directory: ${{ env.ARDOUR_DIR }}
@@ -138,7 +214,7 @@ jobs:
           python3 ./waf build -j$(sysctl -n hw.ncpu)
 
       # -------------------------------------------------------------------------
-      # 10. Assemble the Ardour.app bundle from the built binary, mirroring the
+      # 11. Assemble the Ardour.app bundle from the built binary, mirroring the
       #     structure produced by Ardour's tools/osx_packaging/osx_build:
       #       Ardour.app/
       #         Contents/
@@ -203,7 +279,7 @@ jobs:
           find "${APP}" -maxdepth 3 | sort
 
       # -------------------------------------------------------------------------
-      # 11. Build the installer disk image (.dmg) for macOS Intel.
+      # 12. Build the installer disk image (.dmg) for macOS Intel.
       # -------------------------------------------------------------------------
       - name: Create installer disk image (.dmg)
         working-directory: ${{ env.ARDOUR_DIR }}
@@ -214,7 +290,7 @@ jobs:
           ls -lh *.dmg
 
       # -------------------------------------------------------------------------
-      # 12. Publish the installer as a downloadable artifact.
+      # 13. Publish the installer as a downloadable artifact.
       # -------------------------------------------------------------------------
       - name: Upload macOS Intel installer artifact
         uses: actions/upload-artifact@v4
